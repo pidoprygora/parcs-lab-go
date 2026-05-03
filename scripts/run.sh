@@ -31,7 +31,7 @@ SIZE="${SIZE:-}"
 SEED="${SEED:-42}"
 SERVICE_NAME="${SERVICE_NAME:-gauss-runner}"
 LOG_FOLLOW="${LOG_FOLLOW:-0}"
-WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-180}"
+WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-540}"
 POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-2}"
 
 WORKER_IMAGE="${REGISTRY_NAMESPACE}/${WORKER_IMAGE_NAME}:${IMAGE_TAG}"
@@ -103,7 +103,7 @@ while true; do
 done
 
 echo "Final task state: ${final_state:-unknown}"
-docker service logs "${SERVICE_NAME}"
+docker service logs --tail 2000 "${SERVICE_NAME}"
 
 case "${final_state}" in
   Failed*|Rejected*)
