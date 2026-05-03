@@ -31,7 +31,7 @@ SIZE="${SIZE:-}"
 SEED="${SEED:-42}"
 SERVICE_NAME="${SERVICE_NAME:-gauss-runner}"
 LOG_FOLLOW="${LOG_FOLLOW:-0}"
-WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-540}"
+WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-3600}"
 POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-2}"
 
 WORKER_IMAGE="${REGISTRY_NAMESPACE}/${WORKER_IMAGE_NAME}:${IMAGE_TAG}"
@@ -84,6 +84,7 @@ fi
 
 deadline=$((SECONDS + WAIT_TIMEOUT_SEC))
 final_state=""
+timed_out=0
 while true; do
   final_state="$(docker service ps "${SERVICE_NAME}" --no-trunc --format '{{.CurrentState}}' | awk 'NR==1{print; exit}')"
 
@@ -97,6 +98,7 @@ while true; do
 
   if (( SECONDS >= deadline )); then
     echo "Timed out waiting for ${SERVICE_NAME} to finish (state: ${final_state:-unknown})"
+    timed_out=1
     break
   fi
   sleep "${POLL_INTERVAL_SEC}"
@@ -104,6 +106,11 @@ done
 
 echo "Final task state: ${final_state:-unknown}"
 docker service logs --tail 2000 "${SERVICE_NAME}"
+
+if [[ "${timed_out}" -eq 1 ]]; then
+  echo "ERROR: experiment did not finish within ${WAIT_TIMEOUT_SEC}s" >&2
+  exit 2
+fi
 
 case "${final_state}" in
   Failed*|Rejected*)

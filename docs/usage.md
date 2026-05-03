@@ -8,15 +8,15 @@
 - `gauss-runner` — координатор обчислень.
 - `gauss-worker` — воркер, який виконує елімінацію блоку рядків.
 - `scripts/run.sh` — скрипт для build/push/run і перегляду логів.
+- `scripts/experiments.sh` — пакетний запуск серії кейсів з JSON.
 
 ## 2) Підняття інфраструктури
 
-Повний покроковий гайд винесено в `docs/infrastructure.md`:
-- ініціалізація Docker Swarm,
-- створення overlay network `parcs`,
-- запуск `docker-proxy`,
-- перевірка стану,
-- зупинка та очистка.
+Повний покроковий гайд винесено в `docs/infrastructure.md`.
+
+Два варіанти:
+- **Локально** — Docker Swarm + `docker-proxy` на своїй машині.
+- **AWS EC2** — Terraform розгортає інстанцію, управління через SSM.
 
 Для запуску `run.sh` і `experiments.sh` потрібен `LEADER_URL=tcp://docker-proxy:4321`.
 
@@ -27,7 +27,7 @@
 - як запускати `scripts/experiments.sh`,
 - параметри, приклади і типові помилки.
 
-## 4) Передумови
+## 4) Передумови (локальний варіант)
 
 Потрібно встановити:
 - Docker Desktop або Docker Engine
@@ -64,37 +64,51 @@ tcp://docker-proxy:4321
 
 ## 6) Базовий запуск
 
-З кореня проєкту:
+З кореня проєкту — з явною матрицею:
 
 ```bash
 LEADER_URL='tcp://docker-proxy:4321' \
 SKIP_PUSH=1 \
-REGISTRY_NAMESPACE=local \
-WORKER_IMAGE_NAME=gauss-worker \
-RUNNER_IMAGE_NAME=gauss-runner \
 NUM_WORKERS=2 \
 MATRIX='[[2,1,-1,8],[-3,-1,2,-11],[-2,1,2,-3]]' \
 SERVICE_NAME='gauss-runner-lab' \
 ./scripts/run.sh
 ```
 
-Очікуваний результат у логах:
+Або з генерованою матрицею (рекомендується для великих розмірів):
+
+```bash
+LEADER_URL='tcp://docker-proxy:4321' \
+SKIP_PUSH=1 \
+NUM_WORKERS=4 \
+SIZE=1000 \
+SEED=42 \
+./scripts/run.sh
+```
+
+Очікуваний результат у логах для 3×3:
 - `x[0] = 2.00000000`
 - `x[1] = 3.00000000`
 - `x[2] = -1.00000000`
 
 ## 7) Формат вхідних даних
 
-Вхід передається через `MATRIX` як JSON масив розширеної матриці `[A|b]`.
+Runner підтримує два варіанти задати матрицю:
 
-Для системи `n x n`:
-- має бути `n` рядків
-- у кожному рядку має бути `n + 1` елементів
-
-Приклад 3x3:
+**`MATRIX`** — JSON масив розширеної матриці `[A|b]`:
+- для системи `n x n`: `n` рядків, у кожному `n + 1` елементів.
+- підходить для малих та фіксованих матриць.
 
 ```text
 [[2,1,-1,8],[-3,-1,2,-11],[-2,1,2,-3]]
+```
+
+**`SIZE` + `SEED`** — runner генерує випадкову діагонально домінантну матрицю:
+- рекомендується для матриць від ~300×300.
+- `SEED` опційний, дефолт `42`.
+
+```bash
+SIZE=2000 SEED=42
 ```
 
 ## 8) Основні параметри `run.sh`
@@ -102,15 +116,20 @@ SERVICE_NAME='gauss-runner-lab' \
 Обов'язковий:
 - `LEADER_URL` — адреса Docker API для PARCS (`tcp://...:4321`)
 
+Вхідні дані (одне з двох):
+- `MATRIX` — JSON розширеної матриці (малі матриці)
+- `SIZE` — розмір для генерації (великі матриці); `SEED` — опційно
+
 Необов'язкові:
 - `REGISTRY_NAMESPACE` (default: `local`)
 - `WORKER_IMAGE_NAME` (default: `gauss-worker`)
 - `RUNNER_IMAGE_NAME` (default: `gauss-runner`)
 - `IMAGE_TAG` (default: `latest`)
 - `NUM_WORKERS` (default: `2`)
-- `MATRIX` (default: тестовий 3x3 приклад)
 - `SERVICE_NAME` (default: `gauss-runner`)
 - `SKIP_PUSH=1` — не пушити образи в registry
+- `WAIT_TIMEOUT_SEC` (default: `540`) — таймаут очікування завершення
+- `LOG_FOLLOW=1` — стрімити логи замість полінгу
 
 ## 9) Корисні команди
 
@@ -137,6 +156,9 @@ docker service rm gauss-runner-lab docker-proxy
 - `WORKER_IMAGE env var is required`  
   Перевір, що запуск іде через `scripts/run.sh` або передано `WORKER_IMAGE`.
 
+- `either MATRIX or SIZE env var is required`  
+  Передай або `MATRIX=...`, або `SIZE=...`.
+
 - `MATRIX env var is required` або помилка JSON  
   Перевір синтаксис JSON та лапки у shell.
 
@@ -144,4 +166,4 @@ docker service rm gauss-runner-lab docker-proxy
   Матриця вироджена або близька до виродженої.
 
 - Runner не може стартувати worker-сервіси  
-  Перевір `LEADER_URL` і доступність Docker API (див. секцію про `docker-proxy`).
+  Перевір `LEADER_URL` і доступність Docker API (div. секцію про `docker-proxy`).

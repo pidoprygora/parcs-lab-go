@@ -8,10 +8,22 @@
 
 У коді використовується розширена матриця `[A|b]`.
 
-## 2) Ролі в PARCS
+## 2) Вхідні дані
+
+Runner підтримує два способи задати матрицю:
+
+- **`MATRIX`** — JSON-рядок розширеної матриці `[A|b]`. Підходить для малих і фіксованих прикладів.
+- **`SIZE` + `SEED`** — runner генерує випадкову діагонально домінантну матрицю розміром `n×n` (функція `generateMatrix`). Рекомендується для великих матриць (від ~300×300), де JSON-рядок перевищує ліміт змінних оточення.
+
+`generateMatrix`:
+- недіагональні елементи — цілі з `[-5, 5]`,
+- діагональний елемент `a[i][i]` > сума `|a[i][j]|` по рядку (гарантована невиродженість),
+- вектор `b` — цілі з `[-100, 100]`.
+
+## 3) Ролі в PARCS
 
 - `gauss-runner`:
-  - читає `MATRIX` і `NUM_WORKERS`,
+  - читає `MATRIX` (або генерує матрицю за `SIZE`+`SEED`) і `NUM_WORKERS`,
   - запускає `NUM_WORKERS` довгоживучих worker-сервісів **один раз** перед початком елімінації,
   - керує кроками елімінації (pivot, розбиття рядків, збір результатів),
   - надсилає задачі і отримує результати від worker-ів **конкурентно** через goroutines,
@@ -24,7 +36,7 @@
   - повторює цикл до отримання сигналу `Done: true`,
   - коректно обробляє порожній блок рядків (повертає порожній результат без обчислень).
 
-## 3) Послідовність обчислень
+## 4) Послідовність обчислень
 
 На кожному кроці `k` прямого ходу:
 
@@ -54,7 +66,7 @@
 Після цього Runner виконує зворотний хід:
 - `x[i] = (b[i] - sum(a[i][j] * x[j])) / a[i][i]` для `i = n-1 ... 0`.
 
-## 4) Де саме відбувається паралелізація
+## 5) Де саме відбувається паралелізація
 
 Паралелізація присутня на **двох рівнях**:
 
@@ -75,7 +87,7 @@
 - partial pivoting,
 - зворотний хід.
 
-## 5) Ключові точки в коді
+## 6) Ключові точки в коді
 
 У `gauss-runner/main.go`:
 - `forwardEliminationParallel(...)` — pre-start workers, керування прямим ходом, concurrent send/recv.
@@ -85,11 +97,13 @@
 У `gauss-worker/main.go`:
 - `Run()` — цикл: recv → eliminate local chunk → send, до `Done: true`.
 
-## 6) Схема потоку даних
+## 7) Схема потоку даних
 
 ```mermaid
 flowchart TD
-    inputMatrix[MATRIX ENV] --> runnerParse[Runner parse and validate]
+    inputMatrix["MATRIX (env)"] --> runnerParse[Runner parse and validate]
+    inputSize["SIZE + SEED (env)"] --> generateMatrix[generateMatrix: random diag-dominant]
+    generateMatrix --> runnerParse
     runnerParse --> preStart["Pre-start N workers (once)"]
     preStart --> stepLoop[For each pivot step k]
     stepLoop --> pivoting[Partial pivoting]
@@ -109,7 +123,7 @@ flowchart TD
     backSub --> solution[Solution x]
 ```
 
-## 7) Практичні нюанси
+## 8) Практичні нюанси
 
 - Обчислення з `float64`, тому використовується `epsilon = 1e-12`.
 - Після елімінації worker обнуляє дуже малі значення (шум floating-point).

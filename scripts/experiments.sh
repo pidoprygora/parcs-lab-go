@@ -168,6 +168,8 @@ run_case() {
 
   if [[ "${rc}" -eq 0 ]]; then
     status="OK"
+  elif [[ "${rc}" -eq 2 ]]; then
+    status="TIMEOUT"
   else
     status="FAIL"
   fi

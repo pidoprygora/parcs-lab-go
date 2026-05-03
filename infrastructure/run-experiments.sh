@@ -45,7 +45,7 @@ TF_REGION=$(terraform -chdir="$SCRIPT_DIR" output -raw ssm_session_command 2>/de
 REGION="${AWS_REGION:-${TF_REGION:-us-east-1}}"
 EXPERIMENT="${EXPERIMENT:-all}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
-COMMAND_TIMEOUT="${COMMAND_TIMEOUT:-600}"
+COMMAND_TIMEOUT="${COMMAND_TIMEOUT:-7200}"
 
 if [[ -z "${INSTANCE_ID}" ]]; then
   echo "ERROR: Could not read instance_id from Terraform outputs."
