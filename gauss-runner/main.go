@@ -6,6 +6,7 @@ import (
 	"github.com/lionell/parcs/go/parcs"
 	"log"
 	"math"
+	"math/rand"
 	"os"
 	"strconv"
 	"sync"
@@ -80,27 +81,64 @@ func parseNumWorkers() int {
 }
 
 func parseAugmentedMatrix() [][]float64 {
-	raw := os.Getenv("MATRIX")
-	if raw == "" {
-		log.Fatal("MATRIX env var is required")
-	}
-
-	var matrix [][]float64
-	if err := json.Unmarshal([]byte(raw), &matrix); err != nil {
-		log.Fatalf("failed to parse MATRIX as JSON: %v", err)
-	}
-
-	if len(matrix) == 0 {
-		log.Fatal("matrix must not be empty")
-	}
-
-	n := len(matrix)
-	expectedCols := n + 1
-	for i := range matrix {
-		if len(matrix[i]) != expectedCols {
-			log.Fatalf("row %d has %d columns; expected %d for augmented n x (n+1) matrix",
-				i, len(matrix[i]), expectedCols)
+	if raw := os.Getenv("MATRIX"); raw != "" {
+		var matrix [][]float64
+		if err := json.Unmarshal([]byte(raw), &matrix); err != nil {
+			log.Fatalf("failed to parse MATRIX as JSON: %v", err)
 		}
+		if len(matrix) == 0 {
+			log.Fatal("matrix must not be empty")
+		}
+		n := len(matrix)
+		expectedCols := n + 1
+		for i := range matrix {
+			if len(matrix[i]) != expectedCols {
+				log.Fatalf("row %d has %d columns; expected %d for augmented n x (n+1) matrix",
+					i, len(matrix[i]), expectedCols)
+			}
+		}
+		return matrix
+	}
+
+	sizeStr := os.Getenv("SIZE")
+	if sizeStr == "" {
+		log.Fatal("either MATRIX or SIZE env var is required")
+	}
+	n, err := strconv.Atoi(sizeStr)
+	if err != nil || n <= 0 {
+		log.Fatalf("invalid SIZE value %q", sizeStr)
+	}
+
+	seed := int64(42)
+	if seedStr := os.Getenv("SEED"); seedStr != "" {
+		if s, err := strconv.ParseInt(seedStr, 10, 64); err == nil {
+			seed = s
+		}
+	}
+
+	log.Printf("Generating random %dx%d diagonally dominant matrix (seed=%d)", n, n, seed)
+	return generateMatrix(n, seed)
+}
+
+// generateMatrix produces a random diagonally dominant augmented matrix [A|b].
+// Diagonal dominance guarantees the system is non-singular.
+// Off-diagonal values are integers in [-5, 5]; b values are integers in [-100, 100].
+func generateMatrix(n int, seed int64) [][]float64 {
+	rng := rand.New(rand.NewSource(seed))
+	matrix := make([][]float64, n)
+	for i := range matrix {
+		matrix[i] = make([]float64, n+1)
+		rowAbsSum := 0.0
+		for j := 0; j < n; j++ {
+			if j != i {
+				v := float64(rng.Intn(11) - 5)
+				matrix[i][j] = v
+				rowAbsSum += math.Abs(v)
+			}
+		}
+		// Diagonal strictly greater than the sum of off-diagonal absolute values.
+		matrix[i][i] = rowAbsSum + float64(rng.Intn(10)+1)
+		matrix[i][n] = float64(rng.Intn(201) - 100)
 	}
 	return matrix
 }

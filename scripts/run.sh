@@ -4,13 +4,17 @@ set -euo pipefail
 # Required environment variables:
 # - LEADER_URL: tcp://<swarm-manager-ip>:4321
 #
+# Matrix input — provide exactly one of:
+# - MATRIX: augmented matrix in JSON format (for small/explicit matrices)
+# - SIZE:   matrix dimension n (runner generates a random n×n diag-dominant matrix)
+#           SEED: optional RNG seed (default: 42)
+#
 # Optional environment variables:
 # - REGISTRY_NAMESPACE: docker registry namespace, default "local"
 # - WORKER_IMAGE_NAME: default "gauss-worker"
 # - RUNNER_IMAGE_NAME: default "gauss-runner"
 # - IMAGE_TAG: default "latest"
 # - NUM_WORKERS: default "2"
-# - MATRIX: augmented matrix in JSON format
 
 if [[ -z "${LEADER_URL:-}" ]]; then
   echo "LEADER_URL is required, e.g. tcp://10.0.0.1:4321"
@@ -22,7 +26,9 @@ WORKER_IMAGE_NAME="${WORKER_IMAGE_NAME:-gauss-worker}"
 RUNNER_IMAGE_NAME="${RUNNER_IMAGE_NAME:-gauss-runner}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 NUM_WORKERS="${NUM_WORKERS:-2}"
-MATRIX="${MATRIX:-[[2,1,-1,8],[-3,-1,2,-11],[-2,1,2,-3]]}"
+MATRIX="${MATRIX:-}"
+SIZE="${SIZE:-}"
+SEED="${SEED:-42}"
 SERVICE_NAME="${SERVICE_NAME:-gauss-runner}"
 LOG_FOLLOW="${LOG_FOLLOW:-0}"
 WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-180}"
@@ -30,6 +36,17 @@ POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-2}"
 
 WORKER_IMAGE="${REGISTRY_NAMESPACE}/${WORKER_IMAGE_NAME}:${IMAGE_TAG}"
 RUNNER_IMAGE="${REGISTRY_NAMESPACE}/${RUNNER_IMAGE_NAME}:${IMAGE_TAG}"
+
+# Decide how to pass the matrix to the runner container.
+# SIZE+SEED avoids the env-var size limit for large matrices (n >= ~300).
+if [[ -n "${SIZE}" ]]; then
+  matrix_env_flags=(--env "SIZE=${SIZE}" --env "SEED=${SEED}")
+else
+  if [[ -z "${MATRIX}" ]]; then
+    MATRIX='[[2,1,-1,8],[-3,-1,2,-11],[-2,1,2,-3]]'
+  fi
+  matrix_env_flags=(--env "MATRIX=${MATRIX}")
+fi
 
 echo "Building images..."
 docker build -t "${WORKER_IMAGE}" "./gauss-worker"
@@ -54,7 +71,7 @@ docker service create \
   --env "LEADER_URL=${LEADER_URL}" \
   --env "WORKER_IMAGE=${WORKER_IMAGE}" \
   --env "NUM_WORKERS=${NUM_WORKERS}" \
-  --env "MATRIX=${MATRIX}" \
+  "${matrix_env_flags[@]}" \
   "${RUNNER_IMAGE}"
 
 echo "Waiting for logs from ${SERVICE_NAME}..."

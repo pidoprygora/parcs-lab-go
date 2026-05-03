@@ -13,9 +13,14 @@ set -euo pipefail
 #   SKIP_PUSH=1            # recommended for local runs
 #   REGISTRY_NAMESPACE=local
 #
+# Each experiment in the JSON must have either:
+#   "matrix": [...]        — explicit augmented matrix (small/fixed inputs)
+#   "size": <n>            — generate a random n×n diagonally dominant matrix
+#                            "seed": <int>  optional RNG seed (default: 42)
+#
 # Example:
 #   LEADER_URL=tcp://docker-proxy:4321 SKIP_PUSH=1 ./scripts/experiments.sh
-#   LEADER_URL=tcp://docker-proxy:4321 INPUT_JSON=./scripts/experiments.json EXPERIMENT=case4x4 SKIP_PUSH=1 ./scripts/experiments.sh
+#   LEADER_URL=tcp://docker-proxy:4321 EXPERIMENT=case1000_w4 SKIP_PUSH=1 ./scripts/experiments.sh
 
 if [[ -z "${LEADER_URL:-}" ]]; then
   echo "LEADER_URL is required (e.g. tcp://docker-proxy:4321)"
@@ -33,6 +38,8 @@ if [[ ! -f "${INPUT_JSON}" ]]; then
   exit 1
 fi
 
+# Output: name TAB workers TAB matrix TAB size TAB seed
+# matrix is empty string for size-based experiments; size/seed empty for matrix-based.
 build_experiment_list() {
   python3 - "${INPUT_JSON}" "${EXPERIMENT}" "${NUM_WORKERS}" <<'PY'
 import json
@@ -65,19 +72,26 @@ for item in experiments:
 
     name = item.get("name")
     matrix = item.get("matrix")
+    size = item.get("size")
+    seed = item.get("seed", 42)
     workers = int(item.get("num_workers", default_workers))
 
     if not name:
         raise SystemExit("Each experiment must have a non-empty 'name'")
     if selected != "all" and name != selected:
         continue
-    if matrix is None:
-        raise SystemExit(f"Experiment '{name}' is missing required field 'matrix'")
+    if matrix is None and size is None:
+        raise SystemExit(f"Experiment '{name}' must have either 'matrix' or 'size'")
+    if size is not None and (not isinstance(size, int) or size <= 0):
+        raise SystemExit(f"Experiment '{name}' has invalid size={size}")
     if workers <= 0:
         raise SystemExit(f"Experiment '{name}' has invalid num_workers={workers}")
 
-    matrix_compact = json.dumps(matrix, separators=(",", ":"))
-    print(f"{name}\t{workers}\t{matrix_compact}")
+    if matrix is not None:
+        matrix_compact = json.dumps(matrix, separators=(",", ":"))
+        print(f"{name}\t{workers}\t{matrix_compact}\t\t")
+    else:
+        print(f"{name}\t{workers}\t\t{size}\t{seed}")
 PY
 }
 
@@ -85,6 +99,8 @@ run_case() {
   local name="$1"
   local workers="$2"
   local matrix="$3"
+  local size="$4"
+  local seed="$5"
   local service_name="gauss-${name}"
   local output
   local rc
@@ -97,22 +113,43 @@ run_case() {
   echo "============================================================"
   echo "Running experiment: ${name}"
   echo "NUM_WORKERS=${workers}"
+  if [[ -n "${size}" ]]; then
+    echo "SIZE=${size}  SEED=${seed:-42}"
+  else
+    echo "MATRIX_LEN=${#matrix}"
+  fi
   echo "SERVICE_NAME=${service_name}"
   echo "============================================================"
 
   set +e
-  output="$(
-    LEADER_URL="${LEADER_URL}" \
-  REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE}" \
-  WORKER_IMAGE_NAME=gauss-worker \
-  RUNNER_IMAGE_NAME=gauss-runner \
-  NUM_WORKERS="${workers}" \
-  MATRIX="${matrix}" \
-  SERVICE_NAME="${service_name}" \
-  SKIP_PUSH="${SKIP_PUSH}" \
-  ./scripts/run.sh
-  2>&1
-  )"
+  if [[ -n "${size}" ]]; then
+    output="$(
+      LEADER_URL="${LEADER_URL}" \
+      REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE}" \
+      WORKER_IMAGE_NAME=gauss-worker \
+      RUNNER_IMAGE_NAME=gauss-runner \
+      NUM_WORKERS="${workers}" \
+      SIZE="${size}" \
+      SEED="${seed:-42}" \
+      SERVICE_NAME="${service_name}" \
+      SKIP_PUSH="${SKIP_PUSH}" \
+      ./scripts/run.sh \
+      2>&1
+    )"
+  else
+    output="$(
+      LEADER_URL="${LEADER_URL}" \
+      REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE}" \
+      WORKER_IMAGE_NAME=gauss-worker \
+      RUNNER_IMAGE_NAME=gauss-runner \
+      NUM_WORKERS="${workers}" \
+      MATRIX="${matrix}" \
+      SERVICE_NAME="${service_name}" \
+      SKIP_PUSH="${SKIP_PUSH}" \
+      ./scripts/run.sh \
+      2>&1
+    )"
+  fi
   rc=$?
   set -e
 
@@ -135,7 +172,7 @@ run_case() {
     status="FAIL"
   fi
 
-  SUMMARY_ROWS+=("${name}|${workers}|${algo_ms}|${status}|${solution}")
+  SUMMARY_ROWS+=("${name}|${workers}|${size:-matrix}|${algo_ms}|${status}|${solution}")
   if [[ "${status}" != "OK" ]]; then
     HAS_FAILURE=1
   fi
@@ -144,19 +181,19 @@ run_case() {
 SUMMARY_ROWS=()
 HAS_FAILURE=0
 
-while IFS=$'\t' read -r name workers matrix; do
+while IFS=$'\t' read -r name workers matrix size seed; do
   [[ -z "${name:-}" ]] && continue
-  run_case "${name}" "${workers}" "${matrix}"
+  run_case "${name}" "${workers}" "${matrix}" "${size}" "${seed}"
 done < <(build_experiment_list)
 
 echo
 echo "============================= FINAL SUMMARY ============================="
-printf "%-26s %-10s %-12s %-8s %s\n" "experiment" "workers" "algo_ms" "status" "solution"
-printf "%-26s %-10s %-12s %-8s %s\n" "--------------------------" "----------" "------------" "--------" "------------------------------"
+printf "%-26s %-10s %-8s %-12s %-8s %s\n" "experiment" "workers" "input" "algo_ms" "status" "solution"
+printf "%-26s %-10s %-8s %-12s %-8s %s\n" "--------------------------" "----------" "--------" "------------" "--------" "------------------------------"
 
 for row in "${SUMMARY_ROWS[@]}"; do
-  IFS='|' read -r name workers algo_ms status solution <<< "${row}"
-  printf "%-26s %-10s %-12s %-8s %s\n" "${name}" "${workers}" "${algo_ms}" "${status}" "${solution}"
+  IFS='|' read -r name workers input algo_ms status solution <<< "${row}"
+  printf "%-26s %-10s %-8s %-12s %-8s %s\n" "${name}" "${workers}" "${input}" "${algo_ms}" "${status}" "${solution}"
 done
 
 if [[ "${HAS_FAILURE}" -eq 1 ]]; then
