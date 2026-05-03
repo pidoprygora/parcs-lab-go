@@ -89,9 +89,9 @@ for item in experiments:
 
     if matrix is not None:
         matrix_compact = json.dumps(matrix, separators=(",", ":"))
-        print(f"{name}\t{workers}\t{matrix_compact}\t\t")
+        print(f"{name}|{workers}|{matrix_compact}||")
     else:
-        print(f"{name}\t{workers}\t\t{size}\t{seed}")
+        print(f"{name}|{workers}||{size}|{seed}")
 PY
 }
 
@@ -181,19 +181,55 @@ run_case() {
 SUMMARY_ROWS=()
 HAS_FAILURE=0
 
-while IFS=$'\t' read -r name workers matrix size seed; do
+while IFS='|' read -r name workers matrix size seed; do
   [[ -z "${name:-}" ]] && continue
   run_case "${name}" "${workers}" "${matrix}" "${size}" "${seed}"
 done < <(build_experiment_list)
 
 echo
 echo "============================= FINAL SUMMARY ============================="
-printf "%-26s %-10s %-8s %-12s %-8s %s\n" "experiment" "workers" "input" "algo_ms" "status" "solution"
-printf "%-26s %-10s %-8s %-12s %-8s %s\n" "--------------------------" "----------" "--------" "------------" "--------" "------------------------------"
+printf "%-26s %-10s %-8s %-12s %-8s\n" "experiment" "workers" "input" "algo_ms" "status"
+printf "%-26s %-10s %-8s %-12s %-8s\n" "--------------------------" "----------" "--------" "------------" "--------"
 
 for row in "${SUMMARY_ROWS[@]}"; do
   IFS='|' read -r name workers input algo_ms status solution <<< "${row}"
-  printf "%-26s %-10s %-8s %-12s %-8s %s\n" "${name}" "${workers}" "${input}" "${algo_ms}" "${status}" "${solution}"
+  printf "%-26s %-10s %-8s %-12s %-8s\n" "${name}" "${workers}" "${input}" "${algo_ms}" "${status}"
+done
+
+echo
+echo "============================= SOLUTIONS ================================="
+for row in "${SUMMARY_ROWS[@]}"; do
+  IFS='|' read -r name workers input algo_ms status solution <<< "${row}"
+  [[ "${status}" != "OK" || "${solution}" == "-" ]] && continue
+
+  echo
+  printf "  experiment : %s\n" "${name}"
+  printf "  workers    : %s\n" "${workers}"
+  printf "  input      : %s\n" "${input}"
+  printf "  algo_ms    : %s\n" "${algo_ms}"
+  printf "  roots      :\n"
+
+  python3 - "${solution}" <<'PY'
+import json, sys
+
+sol = json.loads(sys.argv[1])
+n = len(sol)
+head = 10
+tail = 10
+
+def fmt(i, v):
+    print(f"    x[{i:<6}] = {v:>12.6f}")
+
+if n <= head + tail:
+    for i, v in enumerate(sol):
+        fmt(i, v)
+else:
+    for i in range(head):
+        fmt(i, sol[i])
+    print(f"    ... ({n - head - tail} values omitted) ...")
+    for i in range(n - tail, n):
+        fmt(i, sol[i])
+PY
 done
 
 if [[ "${HAS_FAILURE}" -eq 1 ]]; then

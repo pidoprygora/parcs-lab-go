@@ -23,6 +23,9 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
+# Experiment logs
+logs/
+
 # macOS
 .DS_Store
 .AppleDouble
