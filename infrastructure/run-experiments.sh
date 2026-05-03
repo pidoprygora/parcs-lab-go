@@ -59,8 +59,9 @@ git config --global --add safe.directory /home/ec2-user/parcs-lab-go
 
 cd /home/ec2-user/parcs-lab-go
 
-echo "==> git pull"
-git pull --ff-only
+echo "==> git sync"
+git fetch origin
+git reset --hard origin/main
 chmod +x scripts/*.sh
 
 echo "==> Running experiments..."
