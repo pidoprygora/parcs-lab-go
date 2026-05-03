@@ -20,6 +20,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# ---------------------------------------------------------------------------
+# Logging: tee all output to logs/<timestamp>_<experiment>.log
+# ---------------------------------------------------------------------------
+
+LOGS_DIR="${REPO_ROOT}/logs"
+mkdir -p "${LOGS_DIR}"
+LOG_FILE="${LOGS_DIR}/$(date -u +%Y%m%dT%H%M%SZ)_${EXPERIMENT:-all}.log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+echo "Log: ${LOG_FILE}"
+echo
 
 # ---------------------------------------------------------------------------
 # Resolve instance ID and region from Terraform outputs
