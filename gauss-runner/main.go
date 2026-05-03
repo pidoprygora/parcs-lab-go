@@ -54,14 +54,23 @@ func (p *Program) Run() {
 		log.Fatalf("backward substitution failed: %v", err)
 	}
 
-	log.Println("=== Solution ===")
 	roundedSolution := make([]float64, len(solution))
 	for i, value := range solution {
-		roundedValue := math.Round(value*100) / 100
-		roundedSolution[i] = roundedValue
-		log.Printf("x[%d] = %.2f", i, roundedValue)
+		roundedSolution[i] = math.Round(value*100) / 100
 	}
-	log.Printf("ALGO_DURATION_MS=%d", time.Since(algoStart).Milliseconds())
+
+	algoMs := time.Since(algoStart).Milliseconds()
+
+	// Print individual roots only for small systems to avoid flooding logs
+	// and hitting the SSM stdout limit (~24 KB).
+	if n <= 50 {
+		log.Println("=== Solution ===")
+		for i, v := range roundedSolution {
+			log.Printf("x[%d] = %.2f", i, v)
+		}
+	}
+
+	log.Printf("ALGO_DURATION_MS=%d", algoMs)
 	if encoded, err := json.Marshal(roundedSolution); err == nil {
 		log.Printf("SOLUTION_JSON=%s", string(encoded))
 	}
