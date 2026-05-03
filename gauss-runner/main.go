@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,7 @@ type EliminationTask struct {
 	PivotRow []float64   `json:"pivot_row"`
 	PivotCol int         `json:"pivot_col"`
 	Rows     [][]float64 `json:"rows"`
+	Done     bool        `json:"done"`
 }
 
 type EliminationResult struct {
@@ -103,7 +105,26 @@ func parseAugmentedMatrix() [][]float64 {
 	return matrix
 }
 
-func forwardEliminationParallel(runner *parcs.Runner, matrix [][]float64, workerImage string, numWorkers int) error {
+// forwardEliminationParallel performs the forward elimination phase using
+// long-lived PARCS workers. Workers are started once and reused across all
+// pivot steps, avoiding per-step container start/stop overhead. Communication
+// with workers at each step happens concurrently via goroutines.
+func forwardEliminationParallel(runner *parcs.Runner, matrix [][]float64, workerImage string, numWorkers int) (retErr error) {
+	tasks := make([]*parcs.Task, numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		task, err := runner.Start(workerImage)
+		if err != nil {
+			shutdownStartedTasks(tasks[:i])
+			return fmt.Errorf("start worker %d: %w", i, err)
+		}
+		tasks[i] = task
+	}
+	defer func() {
+		if err := shutdownStartedTasks(tasks); err != nil && retErr == nil {
+			retErr = err
+		}
+	}()
+
 	n := len(matrix)
 	for k := 0; k < n; k++ {
 		maxIdx := k
@@ -124,47 +145,70 @@ func forwardEliminationParallel(runner *parcs.Runner, matrix [][]float64, worker
 			continue
 		}
 
-		workers := min(numWorkers, len(rowsBelow))
-		chunks := splitRows(rowsBelow, workers)
-		tasks := make([]*parcs.Task, workers)
+		// Always distribute work across all numWorkers; chunks may be empty
+		// for workers when rowsBelow count is less than numWorkers.
+		chunks := splitRows(rowsBelow, numWorkers)
 
-		for i := 0; i < workers; i++ {
-			task, err := runner.Start(workerImage)
+		offsets := make([]int, numWorkers)
+		off := 0
+		for i := 0; i < numWorkers; i++ {
+			offsets[i] = off
+			off += len(chunks[i])
+		}
+
+		// Send tasks to all workers concurrently.
+		sendErrs := make([]error, numWorkers)
+		var wg sync.WaitGroup
+		for i := 0; i < numWorkers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				payload := EliminationTask{
+					PivotRow: matrix[k],
+					PivotCol: k,
+					Rows:     chunks[i],
+				}
+				sendErrs[i] = tasks[i].Send(payload)
+			}(i)
+		}
+		wg.Wait()
+		for i, err := range sendErrs {
 			if err != nil {
-				shutdownStartedTasks(tasks)
-				return fmt.Errorf("start worker %d: %w", i, err)
-			}
-
-			tasks[i] = task
-			payload := EliminationTask{
-				PivotRow: matrix[k],
-				PivotCol: k,
-				Rows:     chunks[i],
-			}
-			if err := task.Send(payload); err != nil {
-				shutdownStartedTasks(tasks)
 				return fmt.Errorf("send to worker %d: %w", i, err)
 			}
 		}
 
-		offset := 0
-		for i := 0; i < workers; i++ {
-			var result EliminationResult
-			if err := tasks[i].Recv(&result); err != nil {
-				shutdownStartedTasks(tasks)
+		// Receive results from all workers concurrently.
+		results := make([]EliminationResult, numWorkers)
+		recvErrs := make([]error, numWorkers)
+		for i := 0; i < numWorkers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				recvErrs[i] = tasks[i].Recv(&results[i])
+			}(i)
+		}
+		wg.Wait()
+		for i, err := range recvErrs {
+			if err != nil {
 				return fmt.Errorf("recv from worker %d: %w", i, err)
 			}
-
-			for j := range result.Rows {
-				matrix[k+1+offset+j] = result.Rows[j]
-			}
-			offset += len(result.Rows)
 		}
 
-		if err := shutdownStartedTasks(tasks); err != nil {
-			return err
+		for i := 0; i < numWorkers; i++ {
+			for j := range results[i].Rows {
+				matrix[k+1+offsets[i]+j] = results[i].Rows[j]
+			}
 		}
 	}
+
+	// Signal all workers to stop before shutdown.
+	for i := 0; i < numWorkers; i++ {
+		if err := tasks[i].Send(EliminationTask{Done: true}); err != nil {
+			return fmt.Errorf("send done to worker %d: %w", i, err)
+		}
+	}
+
 	return nil
 }
 
@@ -211,13 +255,6 @@ func backwardSubstitution(matrix [][]float64) ([]float64, error) {
 		x[i] = sum / matrix[i][i]
 	}
 	return x, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func main() {
